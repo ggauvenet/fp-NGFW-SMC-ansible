@@ -1,7 +1,7 @@
 #!/usr/bin/python
 #
 # Copyright (c) 2017-2019 Forcepoint
-from smc.core.interfaces import SwitchPhysicalInterface
+#from smc.core.interfaces import SwitchPhysicalInterface
 
 
 ANSIBLE_METADATA = {
@@ -31,7 +31,6 @@ options:
     choices:
       - engine_clusters
       - layer2_clusters
-      - ips_clusters
       - fw_clusters
     type: str
   
@@ -231,7 +230,7 @@ try:
     from smc.core.sub_interfaces import ClusterVirtualInterface
     from smc.api.exceptions import UnsupportedEngineFeature
     from smc.core.interfaces import Layer3PhysicalInterface, TunnelInterface, \
-        ClusterPhysicalInterface
+        ClusterPhysicalInterface, SwitchPhysicalInterface
 except ImportError:
     pass
 

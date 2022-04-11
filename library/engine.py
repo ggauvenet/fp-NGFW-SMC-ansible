@@ -522,7 +522,7 @@ from ansible.module_utils.smc_util import ForcepointModuleBase, Cache,\
     is_sixdotsix_compat
 
 try:
-    from smc.core.engines import Layer3Firewall, FirewallCluster
+    from smc.core.engines import Layer3Firewall, FirewallCluster, MasterEngine, MasterEngineCluster
     from smc.core.engine import Engine
     from smc.vpn.policy import GatewayNode
     from smc.routing.bgp import AutonomousSystem, BGPPeering
@@ -578,7 +578,6 @@ class _Interface(object):
         return 'YamlInterface(interface_id={}, vlans={})'.format(
             self.interface_id, self.vlan_ids)
 
-
 class SingleFWInterface(_Interface):
     def __init__(self, interface):
         super(SingleFWInterface, self).__init__(interface)
@@ -591,8 +590,7 @@ class SingleFWInterface(_Interface):
             return TunnelInterface(**vars(self))
         elif getattr(self, 'type', None) == 'switch_physical_interface':
             return SwitchPhysicalInterface(**vars(self))
-        return Layer3PhysicalInterface(**vars(self))
-    
+        return Layer3PhysicalInterface(**vars(self)) 
 
 class ClusterFWInterface(_Interface):
     def __init__(self, interface):
@@ -606,6 +604,18 @@ class ClusterFWInterface(_Interface):
             return TunnelInterface(**vars(self))
         return ClusterPhysicalInterface(**vars(self))
 
+class MasterEngineFWInterface(_Interface):
+    def __init__(self, interface):
+        super(MasterEngineFWInterface, self).__init__(interface)
+        
+        # if hasattr(self, 'macaddress') and not hasattr(self, 'cvi_mode'):
+        #     self.cvi_mode = 'packetdispatch'
+    
+    def as_obj(self):
+        if getattr(self, 'type', None) == 'tunnel_interface':
+            return TunnelInterface(**vars(self))
+        return Layer3PhysicalInterface(**vars(self))
+
 
 class Interfaces(object):
     """
@@ -616,7 +626,8 @@ class Interfaces(object):
     :return: Interface
     """
     type_map = {'single_fw': SingleFWInterface,
-                'fw_cluster': ClusterFWInterface}
+                'fw_cluster': ClusterFWInterface,
+                'master_engine': MasterEngineFWInterface }
     
     def __init__(self, typeof, interfaces):
         self._type = typeof
@@ -668,7 +679,7 @@ def get_or_create_bgp_peering(name):
 
 
 def engine_types():
-    return ['single_fw', 'fw_cluster']
+    return ['single_fw', 'fw_cluster', 'master_engine', 'virtual_fw']
 
 
 def compat_pre643_update_policy_vpn(policy, internal_gw, vpn_def):
@@ -779,7 +790,8 @@ def open_policy(policy, internal_gw, vpn_def, delete_first=None):
     policy.close()
     return changed
     
-   
+
+
 class ForcepointEngine(ForcepointModuleBase):
     def __init__(self):
         
@@ -808,9 +820,12 @@ class ForcepointEngine(ForcepointModuleBase):
             auth_request=dict(type='str'),
             policy_vpn=dict(type='list'),
             enable_vpn=dict(type='list', default=[]),
+            timezone=dict(type='str', default="Europe/Paris"),
             tags=dict(type='list'),
             skip_interfaces=dict(type='bool', default=False),
             delete_undefined_interfaces=dict(type='bool', default=False),
+            virtual_resources=dict(type='list', default=[]),
+            shared_interfaces=dict(type='dict', default={}),
             state=dict(default='present', type='str', choices=['present', 'absent'])
         )
 
@@ -837,7 +852,10 @@ class ForcepointEngine(ForcepointModuleBase):
         self.skip_interfaces = None
         self.delete_undefined_interfaces = None
         self.tags = None
-        
+        self.virtual_resources = None
+        self.shared_interfaces = None
+        self.timezone = None
+
         self.results = dict(
             changed=False,
             engine=dict(),
@@ -1076,10 +1094,13 @@ class ForcepointEngine(ForcepointModuleBase):
                         name=self.name,
                         primary_mgt=self.primary_mgt,
                         backup_mgt=self.backup_mgt,
+                        primary_heartbeat = self.primary_heartbeat,
+                        backup_heartbeat = self.backup_heartbeat,
                         domain_server_address=self.get_dns_entries(),
                         default_nat=self.default_nat,
                         enable_antivirus=self.antivirus,
                         location_ref=self.location,
+                        timezone=self.timezone,
                         snmp=self.snmp,
                         comment=self.comment)
                     
@@ -1101,10 +1122,20 @@ class ForcepointEngine(ForcepointModuleBase):
                         firewall.update(
                             cluster_mode=self.cluster_mode,
                             primary_heartbeat=self.primary_heartbeat)
-                        
                         engine = FirewallCluster.create_bulk(**firewall)
+                    elif 'master_engine' in self.type:
+                        engine = MasterEngineCluster.create_bulk(**firewall)
+                        #create virtual resource (todo: update virtual resource)
+                        vid=0
+                        for virt_name in self.virtual_resources:
+                            vid += 1
+                            engine.virtual_resource.create(name=virt_name, vfw_id=vid)
+
+                    elif 'virtual_fw' in self.type:
+                        engine = Layer3VirtualEngine.create_bulk(**firewall)
                     else:
                         engine = Layer3Firewall.create_bulk(**firewall)
+
                     
                     self.results['state'].append(
                         {'name': engine.name, 'type': engine.type, 'action': 'created'})
@@ -1361,11 +1392,11 @@ class ForcepointEngine(ForcepointModuleBase):
                     getattr(engine, feature).disable()
                     changed = True
             
-#                 if changed:
-#                     self.results['state'].append({
-#                         'name': feature,
-#                         'type': 'addon',
-#                         'action': 'updated'})
+                # if changed:
+                #     self.results['state'].append({
+                #         'name': feature,
+                #         'type': 'addon',
+                #         'action': 'updated'})
         
         if self.domain_server_address:
             dns_elements = [d.value if d.value else d.element
