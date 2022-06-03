@@ -825,7 +825,7 @@ class ForcepointEngine(ForcepointModuleBase):
             skip_interfaces=dict(type='bool', default=False),
             delete_undefined_interfaces=dict(type='bool', default=False),
             virtual_resources=dict(type='list', default=[]),
-            shared_interfaces=dict(type='dict', default={}),
+            shared_interfaces=dict(type='list', default=[]),
             state=dict(default='present', type='str', choices=['present', 'absent'])
         )
 
